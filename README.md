@@ -48,9 +48,8 @@ You can install these dependencies using pip or conda. For example:
 
 ```bash
 
-pip install torch torchvision segment_anything numpy mathutils opencv-python pycocotools matplotlib onnxruntime onnx
+pip install torch torchvision segment_anything numpy mathutils opencv-python pycocotools matplotlib onnxruntime onnx```
 
-Copy
 
 To install this addon in Blender, you need to download or clone this repository and copy the segment_anything_addon folder to your Blender addons directory (usually located at C:\Users\<username>\AppData\Roaming\Blender Foundation\Blender\<version>\scripts\addons on Windows or ~/.config/blender/<version>/scripts/addons on Linux). Alternatively, you can use Blender’s Install Add-on from File option in the Preferences menu and select the segment_anything_addon.zip file.
 
