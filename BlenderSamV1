@@ -1,0 +1,153 @@
+bl_info = {
+    "name": "BlenderSAM: Segment Anything Addon for Blender",
+    "author": "Ariel Tavori",
+    "version": (1, 0),
+    "blender": (2, 93, 0),
+    "location": "Properties > Object Data Properties > Custom Properties",
+    "description": "This addon allows you to use the Segment Anything Model (SAM) from Meta AI to segment objects in images and 3D models using input prompts such as points, boxes, or text.",
+    "warning": "",
+    "doc_url": "",
+    "tracker_url": "",
+    "category": "Object",
+}
+
+import bpy
+import bmesh
+import mathutils
+import segment_anything
+import numpy as np
+import cv2
+import matplotlib.pyplot as plt
+import onnxruntime as ort
+import os
+
+# Define some custom properties for the addon
+bpy.types.Object.image_path = bpy.props.StringProperty(name="Image Path", description="The path to the image file to be segmented", default="")
+bpy.types.Object.model_path = bpy.props.StringProperty(name="Model Path", description="The path to the model checkpoint for the Segment Anything model", default="")
+bpy.types.Object.model_type = bpy.props.EnumProperty(name="Model Type", description="The type of input prompt to use for segmentation", items=[("point", "Point", "Use points as input prompts"), ("box", "Box", "Use boxes as input prompts"), ("text", "Text", "Use text as input prompts")], default="point")
+bpy.types.Object.output_path = bpy.props.StringProperty(name="Output Path", description="The path to the output folder where the masks and materials will be saved", default="")
+bpy.types.Object.threshold = bpy.props.FloatProperty(name="Threshold", description="The threshold value for binarizing the masks", default=0.5, min=0.0, max=1.0)
+bpy.types.Object.confidence = bpy.props.FloatProperty(name="Confidence", description="The confidence value for filtering out low-confidence masks", default=0.9, min=0.0, max=1.0)
+bpy.types.Object.num_classes = bpy.props.IntProperty(name="Number of Classes", description="The number of classes to segment in an image or model", default=10, min=1, max=100)
+bpy.types.Object.num_samples = bpy.props.IntProperty(name="Number of Samples", description="The number of samples to use for text-based segmentation", default=100, min=1, max=1000)
+bpy.types.Object.num_iterations = bpy.props.IntProperty(name="Number of Iterations", description="The number of iterations to run the model for each input prompt", default=10, min=1, max=100)
+bpy.types.Object.num_proposals = bpy.props.IntProperty(name="Number of Proposals", description="The number of proposals to generate for each input prompt", default=5, min=1, max=100)
+bpy.types.Object.num_refinements = bpy.props.IntProperty(name="Number of Refinements", description="The number of refinements to apply for each proposal", default=3, min=1, max=100)
+bpy.types.Object.num_samples_per_class = bpy.props.IntProperty(name="Number of Samples per Class", description="The number of samples to use for each class in automatic segmentation", default=10, min=1, max=100)
+bpy.types.Object.num_classes_per_prompt = bpy.props.IntProperty(name="Number of Classes per Prompt", description="The number of classes to segment for each input prompt in manual segmentation", default=5, min=1, max=100)
+bpy.types.Object.num_samples_per_prompt = bpy.props.IntProperty(name="Number of Samples per Prompt", description="The number of samples to use for each input prompt in manual segmentation", default=20, min=1, max=100)
+bpy.types.Object.num_iterations_per_prompt = bpy.props.IntProperty(name="Number of Iterations per Prompt", description="The number of iterations to run the model for each input prompt in manual segmentation", default=5, min=1, max=100)
+bpy.types.Object.num_proposals_per_prompt = bpy.props.IntProperty(name="Number of Proposals per Prompt", description="The number of proposals to generate for each input prompt in manual segmentation", default=3, min=1, max=100)
+bpy.types.Object.num_refinements_per_prompt = bpy.props.IntProperty(name="Number of Refinements per Prompt", description="The number of refinements to apply for each proposal in manual segmentation", default=2, min=1, max=100)
+
+# Define a panel class for the addon UI
+class BlenderSAM_PT_Panel(bpy.types.Panel):
+    bl_idname = "BlenderSAM_PT_Panel"
+    bl_label = "BlenderSAM: Segment Anything Addon"
+    bl_category = "BlenderSAM"
+    bl_space_type = "PROPERTIES"
+    bl_region_type = "WINDOW"
+    bl_context = "object"
+    
+    def draw(self, context):
+        layout = self.layout
+        obj = context.object
+        
+        # Draw the custom properties in the panel
+        layout.prop(obj, "image_path")
+        layout.prop(obj, "model_path")
+        layout.prop(obj, "model_type")
+        layout.prop(obj, "output_path")
+        layout.prop(obj, "threshold")
+        layout.prop(obj, "confidence")
+        layout.prop(obj, "num_classes")
+        layout.prop(obj, "num_samples")
+        layout.prop(obj, "num_iterations")
+        layout.prop(obj, "num_proposals")
+        layout.prop(obj, "num_refinements")
+        layout.prop(obj, "num_samples_per_class")
+        layout.prop(obj, "num_classes_per_prompt")
+        layout.prop(obj, "num_samples_per_prompt")
+        layout.prop(obj, "num_iterations_per_prompt")
+        layout.prop(obj, "num_proposals_per_prompt")
+        layout.prop(obj, "num_refinements_per_prompt")
+        
+        # Draw the buttons for the operators in the panel
+        row = layout.row()
+        row.scale_y = 2.0
+        row.operator("object.generate_masks")
+        
+        row = layout.row()
+        row.scale_y = 2.0
+        row.operator("object.create_models")
+        
+        row = layout.row()
+        row.scale_y = 2.0
+        row.operator("object.segment_models")
+
+# Define an operator class for generating masks and materials
+class BlenderSAM_OT_GenerateMasks(bpy.types.Operator):
+    bl_idname = "object.generate_masks"
+    bl_label = "Generate Masks"
+    bl_description = "Generate masks and materials for all objects in the image using the Segment Anything model"
+    
+    def execute(self, context):
+        
+        # Get the custom properties from the context object
+        obj = context.object
+        image_path = obj.image_path
+        model_path = obj.model_path
+        model_type = obj.model_type
+        output_path = obj.output_path
+        threshold = obj.threshold
+        confidence = obj.confidence
+        num_classes = obj.num_classes
+        num_samples_per_class = obj.num_samples_per_class
+        
+         # Load the image file using Blender's image module
+         try:
+             # Check if the image path is valid and exists
+             if os.path.isfile(image_path):
+                 # Use Blender's image open operator to load the image file
+                 bpy.ops.image.open(filepath=image_path)
+                 # Get the image object from Blender's data by its name
+                 image_name = os.path.basename(image_path)
+                 image = bpy.data.images[image_name]
+             else:
+                 raise FileNotFoundError("Image file not found")
+         except RuntimeError:
+             self.report({"ERROR"}, f"Cannot load image file: {image_path}")
+             return {"CANCELLED"}
+         
+         # Load the model checkpoint using ONNX Runtime
+         try:
+             # Check if the model path is valid and exists
+             if os.path.isfile(model_path):
+                 # Use ONNX Runtime to load the model checkpoint
+                 session = ort.InferenceSession(model_path)
+             else:
+                 raise FileNotFoundError("Model checkpoint not found")
+         except RuntimeError:
+             self.report({"ERROR"}, f"Cannot load model checkpoint: {model_path}")
+             return {"CANCELLED"}
+         
+         # Generate masks and materials for all objects in the image using the Segment Anything model
+         try:
+             # Convert the image to a numpy array
+             image_array = np.array(image.pixels).reshape(image.size[0], image.size[1], 4)
+             
+             # Use the Segment Anything model to segment all objects in the image automatically without any input prompts
+             masks, labels = segment_anything.segment(image_array,
+                                                      session,
+                                                      model_type=model_type,
+                                                      threshold=threshold,
+                                                      confidence=confidence,
+                                                      num_classes=num_classes,
+                                                      num_samples_per_class=num_samples_per_class)
+             
+             # Create a list of images and materials for each mask and label pair
+             images = []
+             materials = []
+             for i in range(len(masks)):
+                 # Create an image object from the mask array and name it with the prefix "_mask"
+                 mask_image_name =
