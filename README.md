@@ -6,9 +6,9 @@ This addon allows you to use the Segment Anything Model (SAM) from Meta AI to se
 
 - [Installation](#installation)
 - [Usage](#usage)
-- [Generating Masks and Materials](#generating-masks-and-materials)
-- [Creating Models from Masks](#creating-models-from-masks)
-- [Segmenting Models](#segmenting-models)
+  - [Generating Masks and Materials](#generating-masks-and-materials)
+  - [Creating Models from Masks](#creating-models-from-masks)
+  - [Segmenting Models](#segmenting-models)
 - [Tips and Suggestions](#tips-and-suggestions)
 - [Suggested Use Cases](#suggested-use-cases)
 
@@ -52,7 +52,7 @@ To generate masks and materials for all objects in an image, follow these steps:
 2. After selecting an image file, click on the Generate Masks button in the SAM panel. This will load the image and use the Segment Anything model to generate masks and materials for all objects in it. You will see a message in the console informing you of the progress and results.
 3. After generating masks and materials, you will see a list of images and materials in Blender’s data with names starting with “SAM_input”. Each image represents a mask for an object in the original image, and each material uses that mask as its alpha texture.
 
-[Back to top](#table-of-contents)
+
 
 ### Creating Models from Masks
 
@@ -61,7 +61,7 @@ To create models from masks and materials, follow these steps:
 1. After generating masks and materials, click on the Create Models button in the SAM panel. This will use the masks and materials as references for 3D modeling by creating plane objects with extruded depth for each mask and material pair. You will see a message in the console informing you of the progress and results.
 2. After creating models from masks, you will see a list of plane objects and materials in Blender’s data with names starting with “plane_” and “_material” respectively. Each plane object represents a model for an object in the original image, and each material uses its corresponding mask as its alpha texture.
 
-[Back to top](#table-of-contents)
+
 
 ### Segmenting Models
 
