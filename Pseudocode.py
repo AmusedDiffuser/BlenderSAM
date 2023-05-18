@@ -1,339 +1,240 @@
-# Import the Segment Anything model and the Blender API
-import segment_anything
+# BlenderSAM Segment Anything Addon for Blender (Pseudocode v2)
+
+"""
+This addon allows you to use the Segment Anything Model (SAM) from Meta AI to segment objects in images and 3D models using input prompts such as points, boxes, or text. SAM is a promptable segmentation system with zero-shot generalization to unfamiliar objects and images, without the need for additional training. You can use this addon to generate masks and materials for all objects in an image, use them as references for 3D modeling, and segment different parts of a 3D model and apply different textures or materials to them.
+"""
+
+# Import the required modules
 import bpy
-
-# Import numpy for array manipulation
-import numpy as np
-
-# Import mathutils for matrix operations
+import bmesh
 import mathutils
+import segment_anything
+import numpy as np
+import cv2
+import matplotlib.pyplot as plt
+import onnxruntime as ort
+import os
 
-# Define a function to load an image and generate masks for all objects in it
-def generate_masks(image_path):
-    """
-    This function loads an image from a given path and generates masks for all objects in it using the Segment Anything model.
-    Parameters:
-        image_path (str): The path to the image file.
-    Returns:
-        masks (list): A list of dictionaries containing mask data, label, score, width, height, x, and y for each object in the image.
-        materials (list): A list of Blender material objects corresponding to each mask.
-    """
+# Define some variables or arguments that can be customized by the user or detected automatically by the script
+image_path = "path/to/image/file" # The path to the image file to be segmented
+model_path = "path/to/model/checkpoint" # The path to the model checkpoint for the Segment Anything model
+model_type = "point" # The type of input prompt to use for segmentation ("point", "box", or "text")
+output_path = "path/to/output/folder" # The path to the output folder where the masks and materials will be saved
 
-    # Try to load the image and create a new image object in Blender
-    try:
-        image = bpy.data.images.load(image_path)
-        image.name = "SAM_input"
-    except RuntimeError as e:
-        # Handle the error if the image cannot be loaded
-        print(f"Error: {e}")
-        return None, None
+# Define some options or parameters that can improve or customize the segmentation results
+threshold = 0.5 # The threshold value for binarizing the masks
+confidence = 0.9 # The confidence value for filtering out low-confidence masks
+num_classes = 10 # The number of classes to segment in an image or model
+num_samples = 100 # The number of samples to use for text-based segmentation
+num_iterations = 10 # The number of iterations to run the model for each input prompt
+num_proposals = 5 # The number of proposals to generate for each input prompt
+num_refinements = 3 # The number of refinements to apply for each proposal
+num_samples_per_class = 10 # The number of samples to use for each class in automatic segmentation
+num_classes_per_prompt = 5 # The number of classes to segment for each input prompt in manual segmentation
+num_samples_per_prompt = 20 # The number of samples to use for each input prompt in manual segmentation
+num_iterations_per_prompt = 5 # The number of iterations to run the model for each input prompt in manual segmentation
+num_proposals_per_prompt = 3 # The number of proposals to generate for each input prompt in manual segmentation
+num_refinements_per_prompt = 2 # The number of refinements to apply for each proposal in manual segmentation
 
-    # Convert the image to RGB mode if it is not already
-    if image.colorspace_settings.name != "sRGB":
-        image.colorspace_settings.name = "sRGB"
+# Load the image file using Blender's image module
+try:
+    # Check if the image path is valid and exists
+    if os.path.isfile(image_path):
+        # Use Blender's image open operator to load the image file
+        bpy.ops.image.open(filepath=image_path)
+        # Get the image object from Blender's data by its name
+        image_name = os.path.basename(image_path)
+        image = bpy.data.images[image_name]
+    else:
+        raise FileNotFoundError("Image file not found")
+except RuntimeError:
+    print("Error: Cannot load image file")
 
-    # Convert the Blender image object to a numpy array
-    image_array = np.array(image.pixels).reshape(image.size[1], image.size[0], 4)[:, :, :3]
+# Load the model checkpoint using ONNX Runtime
+try:
+    # Check if the model path is valid and exists
+    if os.path.isfile(model_path):
+        # Use ONNX Runtime to load the model checkpoint
+        session = ort.InferenceSession(model_path)
+    else:
+        raise FileNotFoundError("Model checkpoint not found")
+except RuntimeError:
+    print("Error: Cannot load model checkpoint")
 
-    # Reshape the numpy array to have a shape of (height, width, 3) and a dtype of np.uint8
-    image_array = np.uint8(image_array * 255).transpose((1, 0, 2))
-
-    # Rotate and resize the numpy array to match the original image orientation and aspect ratio
-    # Get the rotation angle and scale factor from the image metadata
-    rotation = math.radians(image.metadata.get("Orientation", 0))
-    scale = image.metadata.get("Scale", 1)
-
-    # Create a rotation matrix from the angle
-    rotation_matrix = mathutils.Matrix.Rotation(rotation, 2)
-
-    # Apply the rotation and scale to the numpy array
-    image_array = np.array(
-        [
-            [rotation_matrix @ mathutils.Vector((x * scale, y * scale)) for x in row]
-            for y, row in enumerate(image_array)
-        ]
-    )
-
-    # Load the SAM model and create a mask generator object
-    sam = segment_anything.sam_model_registry["<model_type>"](
-        checkpoint="<path/to/checkpoint>"
-    )
-    mask_generator = segment_anything.SamAutomaticMaskGenerator(sam)
-
-    # Generate masks for all objects in the image
-    masks = mask_generator.generate(image_array)
-
-    # Create an empty list to store the materials
+# Generate masks and materials for all objects in the image using the Segment Anything model
+try:
+    # Convert the image to a numpy array
+    image_array = np.array(image.pixels).reshape(image.size[0], image.size[1], 4)
+    
+    # Use the Segment Anything model to segment all objects in the image automatically without any input prompts
+    masks, labels = segment_anything.segment(image_array, session, model_type="auto", threshold=threshold, confidence=confidence, num_classes=num_classes, num_samples_per_class=num_samples_per_class)
+    
+    # Create a list of images and materials for each mask and label pair
+    images = []
     materials = []
+    for i in range(len(masks)):
+        # Create an image object from the mask array and name it with the prefix "SAM_input"
+        mask_image = bpy.data.images.new(f"SAM_input_{i}", width=image.size[0], height=image.size[1])
+        mask_image.pixels = masks[i].flatten()
+        images.append(mask_image)
+        
+        # Create a material object from the label and name it with the prefix "_material"
+        material = bpy.data.materials.new(f"_material_{i}")
+        material.use_nodes = True
+        
+        # Use the mask image as the alpha texture for the material
+        nodes = material.node_tree.nodes
+        links = material.node_tree.links
+        
+        # Get the principled BSDF node and set its base color to the label color
+        principled_node = nodes.get("Principled BSDF")
+        principled_node.inputs["Base Color"].default_value = labels[i]
+        
+        # Add an image texture node and set its image to the mask image
+        texture_node = nodes.new("ShaderNodeTexImage")
+        texture_node.image = mask_image
+        
+        # Add a mix shader node and set its factor to 0.5
+        mix_node = nodes.new("ShaderNodeMixShader")
+        mix_node.inputs["Fac"].default_value = 0.5
+        
+        # Link the nodes together
+        links.new(principled_node.outputs["BSDF"], mix_node.inputs[1])
+        links.new(texture_node.outputs["Alpha"], mix_node.inputs[2])
+        
+        # Set the material output node's input to the mix shader node's output
+        output_node = nodes.get("Material Output")
+        links.new(mix_node.outputs["Shader"], output_node.inputs["Surface"])
+        
+        materials.append(material)
+        
+    # Save the images and materials to the output folder using Blender's operators module
+    for i in range(len(images)):
+        # Check if the output folder is valid and exists
+        if os.path.isdir(output_path):
+            # Use Blender's image save as operator to save each image object as a png file in the output folder 
+            bpy.ops.image.save_as(save_as_render=False, filepath=output_path + f"/SAM_input_{i}.png", relative_path=True)
+            # Use Blender's libraries write operator to save each material object as a blend file in the output folder 
+            bpy.data.libraries.write(output_path + f"/_material_{i}.blend", {materials[i]})
+            
+except RuntimeError:
+    print("Error: Cannot generate masks and materials")
 
-    # For each mask, create a new image object in Blender and assign it to a new material
-    for mask in masks:
-        # Check if the mask score is above a threshold value (such as 0.5)
-        if mask["score"] > 0.5:
-            # Create a new image object from the mask data and name it with the object label
-            mask_image = bpy.data.images.new(
-                name=mask["label"], width=mask["width"], height=mask["height"]
-            )
-            mask_image.pixels = mask["data"]
-
-            # Create a new material and assign the mask image as its alpha texture
-            material = bpy.data.materials.new(name=mask["label"])
-            material.use_nodes = True
-            nodes = material.node_tree.nodes
-            links = material.node_tree.links
-
-            # Add an image texture node and set its image to the mask image
-            texture_node = nodes.new(type="ShaderNodeTexImage")
-            texture_node.image = mask_image
-
-            # Add a principled BSDF node and set its base color to a random color
-            bsdf_node = nodes.get("Principled BSDF")
-            bsdf_node.inputs["Base Color"].default_value = [
-                random.random() for _ in range(3)
-            ] + [1.0]
-
-            # Link the alpha output of the texture node to the alpha input of the bsdf node
-            links.new(texture_node.outputs["Alpha"], bsdf_node.inputs["Alpha"])
-
-            # Append the material to the list of materials
-            materials.append(material)
-
-    # Return the list of masks and materials
-    return masks, materials
-
-
-# Define a function to use the masks and materials as references for 3D modeling
-def model_from_masks(masks, materials):
-    """
-    This function uses the masks and materials as references for 3D modeling by creating plane objects with extruded depth for each mask and material pair.
-    Parameters:
-        masks (list): A list of dictionaries containing mask data, label, score, width, height, x, and y for each object in the image.
-        materials (list): A list of Blender material objects corresponding to each mask.
-    Returns:
-        None
-    """
-
-    # For each mask and material, create a new plane object in Blender and assign the material to it
-    for mask, material in zip(masks, materials):
-        # Create a new plane object and name it with the object label as a suffix
-        bpy.ops.mesh.primitive_plane_add()
-        plane = bpy.context.object
-        plane.name = f"plane_{mask['label']}"
-
-        # Scale and position the plane to match the mask bounding box
-        plane.scale = (mask["width"] / 2, mask["height"] / 2, 1)
-
-        # Subtract the x and y values from the plane location to align it with the original image
-        plane.location = (
-            plane.location.x - mask["x"],
-            plane.location.y - mask["y"],
-            plane.location.z,
-        )
-
-        # Assign the material to the plane using its label as a prefix
-        plane.data.materials.append(material)
-        plane.material_slots[0].name = f"{mask['label']}_material"
-
-        # Extrude the plane along the normal axis to create some depth
+# Create models from masks and materials using Blender's mesh module
+try:
+    # Create a list of plane objects for each mask and material pair using Blender's mesh primitive plane add operator 
+    planes = []
+    for i in range(len(masks)):
+        # Use Blender's mesh primitive plane add operator to create a plane object and name it with the prefix "plane_"
+        bpy.ops.mesh.primitive_plane_add(size=1, enter_editmode=False, align="WORLD", location=(0, 0, 0), scale=(1, 1, 1))
+        plane_object = bpy.context.active_object
+        plane_object.name = f"plane_{i}"
+        
+        # Scale the plane object to match the mask shape using Blender's transform resize operator
+        bpy.ops.transform.resize(value=(masks[i].shape[1], masks[i].shape[0], 1))
+        
+        # Extrude the plane object along the z-axis based on the mask values using Blender's mesh extrude operator
         bpy.ops.object.mode_set(mode="EDIT")
-        bpy.ops.mesh.extrude_region_move(
-            TRANSFORM_OT_translate={"value": (0, 0, random.uniform(0.1, 1))}
-        )
+        bpy.ops.mesh.select_all(action="SELECT")
+        bpy.ops.mesh.extrude_region_move(TRANSFORM_OT_translate={"value":(0, 0, masks[i] * 10)})
         bpy.ops.object.mode_set(mode="OBJECT")
+        
+        # Assign the material object to the plane object using Blender's object material slot operators
+        bpy.ops.object.material_slot_add()
+        plane_object.material_slots[0].material = materials[i]
+        
+        planes.append(plane_object)
+        
+    # Join all the plane objects into one model object using Blender's object join operator
+    bpy.ops.object.select_all(action="DESELECT")
+    for plane in planes:
+        plane.select_set(True)
+    bpy.ops.object.join()
+    model_object = bpy.context.active_object
+    model_object.name = "model"
+    
+    # Set the origin of the model object to its center of mass using Blender's object origin set operator
+    bpy.ops.object.origin_set(type="ORIGIN_CENTER_OF_MASS")
+    
+    # Shade the model object smoothly using Blender's object shade smooth operator
+    bpy.ops.object.shade_smooth()
+    
+    # Save the model object to a file in the output folder using Blender's libraries write operator
+    if os.path.isdir(output_path):
+        bpy.data.libraries.write(output_path + "/model.blend", {model_object})
+        
+except RuntimeError:
+    print("Error: Cannot create models from masks and materials")
 
-
-# Define a function to segment different parts of a 3D model and apply different textures or materials to them
-def segment_model(model):
-    """
-    This function segments different parts of a 3D model and applies different textures or materials to them using the Segment Anything model.
-    Parameters:
-        model (Blender object): A Blender object representing a 3D model.
-    Returns:
-        None
-    """
-
-    # Convert the model to a mesh object if it is not already one
-    if model.type != "MESH":
-        bpy.ops.object.convert(target="MESH")
-
-    # Load the SAM model and create a predictor object
-    sam = segment_anything.sam_model_registry["<model_type>"](
-        checkpoint="<path/to/checkpoint>"
-    )
-    predictor = segment_anything.SamPredictor(sam)
-
-    # Set the model as the input image for the predictor
-    predictor.set_image(model)
-
-    # For each part of the model, create an input prompt (such as a point or a box) and get the corresponding mask from the predictor
-    for part in model.parts:
-        # Create an input prompt for the part using Blender's UI elements (this could be done by user interaction or some other method)
-        input_prompt = create_input_prompt(part)
-
-        # Get the mask, label, and score from the predictor
-        mask, label, score = predictor.predict(input_prompt)
-
-        # Check if the mask score is above a threshold value (such as 0.5)
-        if mask["score"] > 0.5:
-            # Create a new material and assign it to the part based on the mask and label (this could be done by user selection or some other method)
-            material = create_material(mask, label)
-
-            # Assign the material to the part using its label as a prefix 
-            part.data.materials.append(material)
-            part.material_slots[0].name = f"{label}_material"
-
-
-# Define a helper function to create an input prompt for a given part of a 3D model using Blender's UI elements 
-def create_input_prompt(part):
-   """
-   This function creates an input prompt for a given part of a 3D model using Blender's UI elements.
-   Parameters:
-       part (Blender object): A Blender object representing a part of a 3D model.
-   Returns:
-       input_prompt (dict): A dictionary containing type ("point" or "box") and coordinates of input prompt.
-   """
-
-   # The logic for creating an input prompt goes here 
-   pass
-
-
-# Define a helper function to create a new material based on given mask and label 
-def create_material(mask,label):
-   """
-   This function creates a new material based on given mask and label.
-   Parameters:
-       mask (dict): A dictionary containing mask data.
-       label (str): A string containing object label.
-   Returns:
-       material (Blender material): A Blender material object with given properties.
-   """
-
-   # The logic for creating a new material goes here 
-   pass
-
-
-# Example usage: load an image, generate masks and materials,
-# use them as references for 3D modeling,
-# and and segment one of the models
-Create a panel to display the input image and allow the user to draw points or boxes on it
-class SAM_PT_panel(bpy.types.Panel): “”" This class defines a panel to display the input image and allow the user to draw points or boxes on it. “”"
-
-# Set the panel properties
-bl_label = "Segment Anything"
-bl_idname = "SAM_PT_panel"
-bl_space_type = "VIEW_3D"
-bl_region_type = "UI"
-bl_category = "SAM"
-
-# Define the panel layout
-def draw(self, context):
-    layout = self.layout
-
-    # Add a file browser operator to select an image file
-    layout.operator("image.open")
-
-    # Add a label to show the selected image path
-    layout.label(text=context.space_data.params.filename)
-
-    # Add a button to generate masks and materials for the selected image
-    layout.operator("sam.generate_masks")
-
-    # Add a button to create models from the generated masks and materials
-    layout.operator("sam.model_from_masks")
-
-    # Add a label to show the selected model name
-    layout.label(text=context.object.name)
-
-    # Add a button to segment the selected model using points or boxes
-    layout.operator("sam.segment_model")
-Copy
-Create an operator to generate masks and materials for the selected image
-class SAM_OT_generate_masks(bpy.types.Operator): “”" This class defines an operator to generate masks and materials for the selected image using the Segment Anything model. “”"
-
-# Set the operator properties
-bl_idname = "sam.generate_masks"
-bl_label = "Generate Masks"
-
-# Define the operator execution
-def execute(self, context):
-    # Get the selected image path from Blender's context 
-    image_path = context.space_data.params.filename
-
-    # Check if an image path is selected or not 
-    assert image_path != "", "No image path selected"
-
-    # Print a message to inform the user that masks are being generated 
-    print(f"Generating masks for {image_path}...")
-
-    # Load an image and generate masks and materials
-    masks, materials = generate_masks(image_path)
-
-    # Check if masks and materials are not None (meaning no error occurred)
-    assert masks is not None and materials is not None, "Failed to generate masks or materials"
-
-    # Print a message to inform the user that masks are generated 
-    print(f"Generated {len(masks)} masks.")
-
-    return {"FINISHED"}
-Copy
-Create an operator to create models from the generated masks and materials
-class SAM_OT_model_from_masks(bpy.types.Operator): “”" This class defines an operator to create models from the generated masks and materials using them as references for 3D modeling. “”"
-
-# Set the operator properties
-bl_idname = "sam.model_from_masks"
-bl_label = "Create Models"
-
-# Define the operator execution
-def execute(self, context):
-    # Get the generated masks and materials from Blender's data 
-    masks = [image for image in bpy.data.images if image.name.startswith("SAM_input")]
-    materials = [material for material in bpy.data.materials if material.name.startswith("SAM_input")]
-
-    # Check if masks and materials are not empty or None 
-    assert masks and materials, "No masks or materials found"
-
-    # Print a message to inform the user that models are being created 
-    print(f"Creating models from masks...")
-
-    # Use the masks and materials as references for 3D modeling
-    model_from_masks(masks, materials)
-
-    # Print a message to inform the user that models are created 
-    print(f"Created {len(masks)} models.")
-
-    return {"FINISHED"}
-Copy
-Create an operator to segment the selected model using points or boxes
-class SAM_OT_segment_model(bpy.types.Operator): “”" This class defines an operator to segment the selected model using points or boxes as input prompts for the Segment Anything model. “”"
-
-# Set the operator properties
-bl_idname = "sam.segment_model"
-bl_label = "Segment Model"
-
-# Define the operator execution
-def execute(self, context):
-     # Get the selected model from Blender's context 
-     model = context.object
-
-     # Check if a model is selected or not 
-     assert model is not None, "No model selected"
-
-     # Print a message to inform the user that parts are being segmented 
-     print(f"Segmenting parts of {model.name}...")
-
-     # Segment one of the models (for example, the first one) and apply different textures or materials to its parts
-     segment_model(model)
-
-     # Print a message to inform the user that process is done 
-     print("Done!")
-
-     return {"FINISHED"}
-Copy
-Register all classes defined above
-classes = [SAM_PT_panel, SAM_OT_generate_masks, SAM_OT_model_from_masks, SAM_OT_segment_model]
-
-def register(): for cls in classes: bpy.utils.register_class(cls)
-
-def unregister(): for cls in classes: bpy.utils.unregister_class(cls)
-
-if name == “main”: register()
+# Segment models using points or boxes as input prompts using Blender's operators module
+try:
+    # Get the active object in Blender's viewport as the model to be segmented
+    model_object = bpy.context.active_object
+    
+    # Use Blender's operators module to select points or draw boxes on the model as input prompts for segmentation
+    if model_type == "point":
+        bpy.ops.view3d.select_point()
+    elif model_type == "box":
+        bpy.ops.view3d.draw_box()
+    
+    # Get the selected points or drawn boxes as numpy arrays
+    points_or_boxes = np.array(bpy.context.selected_points_or_boxes)
+    
+    # Convert the model object to a numpy array of vertices and faces
+    vertices = np.array([v.co for v in model_object.data.vertices])
+    faces = np.array([f.vertices for f in model_object.data.polygons])
+    
+    # Use the Segment Anything model to segment different parts of the model based on points or boxes as input prompts
+    masks, labels = segment_anything.segment(vertices, faces, session, model_type=model_type, points_or_boxes=points_or_boxes, threshold=threshold, confidence=confidence, num_classes=num_classes_per_prompt, num_samples=num_samples_per_prompt, num_iterations=num_iterations_per_prompt, num_proposals=num_proposals_per_prompt, num_refinements=num_refinements_per_prompt)
+    
+    # Create a list of materials for each mask and label pair
+    materials = []
+    for i in range(len(masks)):
+         # Create a material object from the label and name it with the prefix "_material"
+         material = bpy.data.materials.new(f"_material_{i}")
+         material.use_nodes = True
+        
+         # Use a vertex color layer as the mask texture for the material
+         nodes = material.node_tree.nodes
+         links = material.node_tree.links
+        
+         # Get the principled BSDF node and set its base color to the label color
+         principled_node = nodes.get("Principled BSDF")
+         principled_node.inputs["Base Color"].default_value = labels[i]
+        
+         # Add a vertex color node and set its layer name to "mask"
+         vertex_color_node = nodes.new("ShaderNodeVertexColor")
+         vertex_color_node.layer_name = "mask"
+        
+         # Add a mix shader node and set its factor to 0.5
+         mix_node = nodes.new("ShaderNodeMixShader")
+         mix_node.inputs["Fac"].default_value = 0.5
+        
+         # Link the nodes together
+         links.new(principled_node.outputs["BSDF"], mix_node.inputs[1])
+         links.new(vertex_color_node.outputs["Color"], mix_node.inputs[2])
+        
+         # Set the material output node's input to the mix shader node's output
+         output_node = nodes.get("Material Output")
+         links.new(mix_node.outputs["Shader"], output_node.inputs["Surface"])
+         
+         materials.append(material)
+         
+     # Assign each material object to a different part of the model based on its mask value using Blender's bmesh module     
+     bm = bmesh.new()
+     bm.from_mesh(model_object.data)
+     
+     for i in range(len(masks)):
+         for f in bm.faces:
+             if masks[i][f.index] == 1:
+                 f.material_index = i
+     
+     bm.to_mesh(model_object.data)     
+     
+     # Save each material object to a separate file in the output folder using Blender's libraries write operator     
+     for i in range(len(materials)):
+         if os.path.isdir(output_path):
+             bpy.data.libraries.write(output_path + f"/_material_{i}.blend", {materials[i]})
+             
+except RuntimeError:
+    print("Error: Cannot segment models using points or boxes")
