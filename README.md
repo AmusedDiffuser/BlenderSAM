@@ -1,5 +1,7 @@
 # BlenderSAM: Segment Anything Addon for Blender
 
+## *Note: Early development, NOT WORKING YET!* 
+
 This addon allows you to use the Segment Anything Model (SAM) from Meta AI to segment objects in images and 3D models using input prompts such as points, boxes, or text. SAM is a promptable segmentation system with zero-shot generalization to unfamiliar objects and images, without the need for additional training. You can use this addon to generate masks and materials for all objects in an image, use them as references for 3D modeling, and segment different parts of a 3D model and apply different textures or materials to them.
 
 ## Table of Contents
